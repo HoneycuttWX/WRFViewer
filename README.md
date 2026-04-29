@@ -32,12 +32,6 @@ Start the viewer:
 python .\wrf_viewer.py
 ```
 
-Start the PBL-focused viewer:
-
-```powershell
-python .\wrf_viewer_pbl.py
-```
-
 You can also open a file or folder at launch:
 
 ```powershell
