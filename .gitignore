@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+
+# Local WRF data and generated media
+WRFout/
+GIFS/
+PBL Variables/
+wrfout*
+*.nc
+*.cdf
+*.png
+*.gif
+
+# Local/editor logs
+debug.log
+.vscode/

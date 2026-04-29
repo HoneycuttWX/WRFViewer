@@ -1,0 +1,4 @@
+wrf-rust
+PySide6
+matplotlib
+Pillow
