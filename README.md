@@ -15,6 +15,7 @@ Desktop viewer for WRFOUT files built with `PySide6`, `matplotlib`, and `wrf-rus
 - Adjust map hodograph overlay size and spacing from the sidebar
 - Set the vertical cross-section top height from the sidebar
 - Browse PBL and surface flux variables in the main viewer (`pblh`, `tke`, `hfx`, `lh`, `qfx`)
+- Plot all-timestep maximum tracks for STP, 0-1 km SRH, and 0-3 km SRH
 - Export the current frame to PNG
 - Export all timesteps of the current variable to GIF
 

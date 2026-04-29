@@ -132,6 +132,29 @@ PBL_VARIABLE_METADATA = [
 
 PBL_VARIABLES = {item["name"]: item for item in PBL_VARIABLE_METADATA}
 
+TRACK_MAX_VARIABLE_METADATA = [
+    {
+        "name": "max_stp",
+        "description": "Maximum STP Track",
+        "units": "unitless",
+        "source_names": ["stp", "stp_effective", "stp_fixed"],
+    },
+    {
+        "name": "max_srh1",
+        "description": "Maximum 0-1 km SRH Track",
+        "units": "m2/s2",
+        "source_names": ["srh1"],
+    },
+    {
+        "name": "max_srh3",
+        "description": "Maximum 0-3 km SRH Track",
+        "units": "m2/s2",
+        "source_names": ["srh3"],
+    },
+]
+
+TRACK_MAX_VARIABLES = {item["name"]: item for item in TRACK_MAX_VARIABLE_METADATA}
+
 MIXING_RATIO_VARIABLES = {
     "qv": "QVAPOR",
     "qc": "QCLOUD",
@@ -262,7 +285,7 @@ class WrfViewer(QMainWindow):
         self.lon = None
         self.variable_metadata = list(wrf.list_variables())
         known_variable_names = {item.get("name") for item in self.variable_metadata}
-        for item in CUSTOM_VARIABLE_METADATA + PBL_VARIABLE_METADATA:
+        for item in CUSTOM_VARIABLE_METADATA + PBL_VARIABLE_METADATA + TRACK_MAX_VARIABLE_METADATA:
             if item["name"] in known_variable_names:
                 continue
             self.variable_metadata.append(item)
@@ -281,6 +304,7 @@ class WrfViewer(QMainWindow):
         self.cross_section_window = None
         self.map_axes = None
         self._style_range_cache = {}
+        self._track_max_cache = {}
 
         self._build_ui()
         self._populate_variables()
@@ -551,6 +575,7 @@ class WrfViewer(QMainWindow):
         self.cross_section_points = []
         self.map_axes = None
         self._style_range_cache = {}
+        self._track_max_cache = {}
         self._update_point_label()
         self._update_cross_section_label()
         self._refresh_cross_section_window()
@@ -570,6 +595,7 @@ class WrfViewer(QMainWindow):
         self.time_slider.setMinimum(0)
         self.time_slider.setMaximum(max(len(self.times) - 1, 0))
         self._style_range_cache = {}
+        self._track_max_cache = {}
         self.time_slider.setValue(0)
         self._sync_units_to_selection()
         self._update_point_label()
@@ -704,11 +730,70 @@ class WrfViewer(QMainWindow):
             data = variable[:]
         return as_float_array(data)
 
+    def _get_track_source_field(self, source_name, timeidx, units=None):
+        try:
+            return as_float_array(self._getvar(source_name, timeidx, units=units))
+        except Exception:
+            if units is None:
+                raise
+            return as_float_array(self._getvar(source_name, timeidx, units=None))
+
+    def _get_track_max_variable(self, variable_name, units=None):
+        cache_key = (variable_name, units or "")
+        cached = self._track_max_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        metadata = TRACK_MAX_VARIABLES[variable_name]
+        source_names = metadata.get("source_names", [])
+        if not source_names:
+            raise RuntimeError(f"No source variables are configured for {variable_name}.")
+
+        max_field = None
+        source_used = None
+        errors = []
+        for timeidx in range(len(self.times)):
+            source_field = None
+            for source_name in source_names:
+                try:
+                    source_field = self._get_track_source_field(source_name, timeidx, units=units)
+                    source_used = source_name
+                    break
+                except Exception as exc:
+                    if timeidx == 0:
+                        errors.append(f"{source_name}: {exc}")
+
+            if source_field is None:
+                continue
+            if source_field.ndim >= 3:
+                source_field = np.nanmax(source_field, axis=0)
+            if source_field.ndim != 2:
+                raise ValueError(
+                    f"{variable_name} requires a 2D source field; {source_used} has shape {source_field.shape}."
+                )
+
+            if max_field is None:
+                max_field = np.array(source_field, dtype=float, copy=True)
+            else:
+                if source_field.shape != max_field.shape:
+                    raise ValueError(
+                        f"{source_used} shape changed from {max_field.shape} to {source_field.shape}."
+                    )
+                max_field = np.fmax(max_field, source_field)
+
+        if max_field is None:
+            detail = "; ".join(errors) if errors else "no source data was available"
+            raise RuntimeError(f"Unable to build {metadata['description']}: {detail}")
+
+        self._track_max_cache[cache_key] = max_field
+        return max_field
+
     def _getvar(self, variable_name, timeidx, units=None):
         if (
             variable_name in MIXING_RATIO_VARIABLES
             or variable_name in DIRECT_DATASET_VARIABLES
             or variable_name in PBL_VARIABLES
+            or variable_name in TRACK_MAX_VARIABLES
             or variable_name == "planetary_albedo"
             or variable_name == "surface_precip"
         ):
@@ -722,6 +807,9 @@ class WrfViewer(QMainWindow):
     def _get_custom_variable(self, variable_name, timeidx, units=None):
         dataset, local_timeidx = self._resolve_raw_time_source(timeidx)
         requested_units = (units or "").strip().lower()
+
+        if variable_name in TRACK_MAX_VARIABLES:
+            return self._get_track_max_variable(variable_name, units=units)
 
         if variable_name in PBL_VARIABLES:
             metadata = PBL_VARIABLES[variable_name]
@@ -1183,6 +1271,14 @@ class WrfViewer(QMainWindow):
     def _use_old_dbz_rendering(self):
         return self.selected_variable() in {"dbz", "maxdbz", "maxdbz_uhel_fill"}
 
+    def _is_track_max_variable(self):
+        return self.selected_variable() in TRACK_MAX_VARIABLES
+
+    def _field_time_label(self, timeidx):
+        if self._is_track_max_variable():
+            return "all loaded times"
+        return self.times[timeidx] if self.times else "time 0"
+
     def domain_label(self):
         if not self.file_path:
             return "Domain: N/A"
@@ -1586,7 +1682,7 @@ class WrfViewer(QMainWindow):
             "display_name": self.selected_display_name(),
             "selected_variable": self.selected_variable(),
             "source_variable": source["source_variable"],
-            "time_label": self.times[timeidx] if self.times else f"time {timeidx}",
+            "time_label": self._field_time_label(timeidx),
             "start_point": self.cross_section_points[0],
             "end_point": self.cross_section_points[1],
             "units_label": self.selected_units_label()
@@ -2216,7 +2312,7 @@ class WrfViewer(QMainWindow):
             axes.set_xlabel("X")
             axes.set_ylabel("Y")
 
-        title = f"{self.domain_label()}\n{self.selected_display_name()} | {self.times[timeidx] if self.times else 'time 0'}"
+        title = f"{self.domain_label()}\n{self.selected_display_name()} | {self._field_time_label(timeidx)}"
         if level is not None:
             title += f" | level {level}"
         if self.smoothing_spin.value() > 0 and not use_old_dbz_rendering:
